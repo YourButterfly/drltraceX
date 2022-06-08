@@ -42,6 +42,20 @@
 #include "drltrace.h"
 #include "drltrace_utils.h"
 
+#ifdef WINDOWS
+#define snprintf _snprintf
+#endif
+#define MAX_MODULENAME_LEN 256
+
+typedef struct _drltrace_m2fargs_t
+{
+    std::vector<drltrace_arg_t *> *args_vec;
+    _drltrace_m2fargs_t *next;
+    char module_name[MAX_MODULENAME_LEN];
+
+} drltrace_m2fargs_t;
+drltrace_m2fargs_t *drltrace_m2fargs_head = NULL;
+
 /* Where to write the trace */
 static file_t outf;
 
@@ -212,16 +226,14 @@ print_libcall_args(std::vector<drltrace_arg_t*> *args_vec, void *wrapcxt)
 }
 
 static void
-print_symbolic_args(const char *name, void *wrapcxt, app_pc func)
+print_symbolic_args(std::vector<drltrace_arg_t *> *args_vec, void *wrapcxt, app_pc func)
 {
-    std::vector<drltrace_arg_t *> *args_vec;
-
     if (op_max_args.get_value() == 0)
         return;
 
 	if (op_use_config.get_value()) {
 		/* looking for libcall in libcalls hashtable */
-		args_vec = libcalls_search(name);
+		// args_vec = libcalls_search(name);
 		if (print_libcall_args(args_vec, wrapcxt)) {
 			dr_fprintf(outf, op_print_ret_addr.get_value() ? "\n   " : "");
 			return; /* we found libcall and sucessfully printed all arguments */
@@ -239,10 +251,11 @@ print_symbolic_args(const char *name, void *wrapcxt, app_pc func)
 static void
 lib_entry(void *wrapcxt, INOUT void **user_data)
 {
-    const char *name = (const char *) *user_data;
+    drltrace_m2fargs_t *m2fargs = (drltrace_m2fargs_t *) *user_data;
     const char *modname = NULL;
     app_pc func = drwrap_get_func(wrapcxt);
-    module_data_t *mod;
+    // initialize mod
+    module_data_t *mod = NULL;
     thread_id_t tid;
     uint mod_id;
     app_pc mod_start, ret_addr;
@@ -275,83 +288,81 @@ lib_entry(void *wrapcxt, INOUT void **user_data)
             return;
         }
     }
-    /* XXX: it may be better to heap-allocate the "module!func" string and
-     * pass in, to avoid this lookup.
-     */
-    mod = dr_lookup_module(func);
-    if (mod != NULL)
-        modname = dr_module_preferred_name(mod);
+    // /* XXX: it may be better to heap-allocate the "module!func" string and
+    //  * pass in, to avoid this lookup.
+    //  */
+    // mod = dr_lookup_module(func);
+    // if (mod != NULL)
+    //     modname = dr_module_preferred_name(mod);
 
-    /* Build the module & function string, then compare to the white/black
-     * list. */
-    char module_name[256];
-    memset(module_name, 0, sizeof(module_name));
+    // /* Build the module & function string, then compare to the white/black
+    //  * list. */
+    // char module_name[256];
+    // memset(module_name, 0, sizeof(module_name));
 
-    /* Temporary workaround for VC2013, which doesn't have snprintf().
-     * apparently, this was added in later releases... */
-#ifdef WINDOWS
-#define snprintf _snprintf
-#endif
-    unsigned int module_name_len = (unsigned int)snprintf(module_name, \
-        sizeof(module_name) - 1, "%s%s%s", modname == NULL ? "" : modname, \
-        modname == NULL ? "" : "!", name);
+    // /* Temporary workaround for VC2013, which doesn't have snprintf().
+    //  * apparently, this was added in later releases... */
 
-    /* Check if this module & function is in the whitelist. */
-    bool allowed = false;
-    bool tested = false;  /* True only if any white/blacklist testing below is done. */
-    for (unsigned int i = 0; (allowed == false) && (i < filter_function_whitelist_len); i++) {
-      tested = true;
+    // unsigned int module_name_len = (unsigned int)snprintf(module_name, \
+    //     sizeof(module_name) - 1, "%s%s%s", modname == NULL ? "" : modname, \
+    //     modname == NULL ? "" : "!", name);
 
-      /* If the whitelist entry contains a wildcard, then compare only the shortest
-       * part of either string. */
-      unsigned int module_name_len_compare;
-      if (filter_function_whitelist[i].is_wildcard)
-        module_name_len_compare = MIN(module_name_len, \
-          filter_function_whitelist[i].func_name_len);
-      else
-        module_name_len_compare = module_name_len;
+    // /* Check if this module & function is in the whitelist. */
+    // bool allowed = false;
+    // bool tested = false;  /* True only if any white/blacklist testing below is done. */
+    // for (unsigned int i = 0; (allowed == false) && (i < filter_function_whitelist_len); i++) {
+    //   tested = true;
 
-      if (fast_strcmp(module_name, module_name_len_compare, \
-          filter_function_whitelist[i].func_name, \
-          filter_function_whitelist[i].func_name_len) == 0) {
-        allowed = true;
-      }
-    }
+    //   /* If the whitelist entry contains a wildcard, then compare only the shortest
+    //    * part of either string. */
+    //   unsigned int module_name_len_compare;
+    //   if (filter_function_whitelist[i].is_wildcard)
+    //     module_name_len_compare = MIN(module_name_len, \
+    //       filter_function_whitelist[i].func_name_len);
+    //   else
+    //     module_name_len_compare = module_name_len;
 
-    /* Check the blacklist if it was specified instead of a whitelist. */
-    if (!allowed && filter_function_blacklist_len > 0) {
-      allowed = true;
-      for (unsigned int i = 0; allowed && (i < filter_function_blacklist_len); i++) {
-        tested = true;
+    //   if (fast_strcmp(module_name, module_name_len_compare, \
+    //       filter_function_whitelist[i].func_name, \
+    //       filter_function_whitelist[i].func_name_len) == 0) {
+    //     allowed = true;
+    //   }
+    // }
 
-	/* If the blacklist entry contains a wildcard, then compare only the shortest
-	 * part of either string. */
-        unsigned int module_name_len_compare;
-        if (filter_function_blacklist[i].is_wildcard)
-          module_name_len_compare = MIN(module_name_len, \
-            filter_function_blacklist[i].func_name_len);
-        else
-          module_name_len_compare = module_name_len;
+    // /* Check the blacklist if it was specified instead of a whitelist. */
+    // if (!allowed && filter_function_blacklist_len > 0) {
+    //   allowed = true;
+    //   for (unsigned int i = 0; allowed && (i < filter_function_blacklist_len); i++) {
+    //     tested = true;
 
-        if (fast_strcmp(module_name, module_name_len_compare, \
-            filter_function_blacklist[i].func_name, \
-            filter_function_blacklist[i].func_name_len) == 0) {
-          allowed = false;
-        }
-      }
-    }
+	// /* If the blacklist entry contains a wildcard, then compare only the shortest
+	//  * part of either string. */
+    //     unsigned int module_name_len_compare;
+    //     if (filter_function_blacklist[i].is_wildcard)
+    //       module_name_len_compare = MIN(module_name_len, \
+    //         filter_function_blacklist[i].func_name_len);
+    //     else
+    //       module_name_len_compare = module_name_len;
 
-    /* If whitelist/blacklist testing was performed, and it was determined
-     * this function is not to be logged... */
-    if (tested && !allowed)
-      return;
+    //     if (fast_strcmp(module_name, module_name_len_compare, \
+    //         filter_function_blacklist[i].func_name, \
+    //         filter_function_blacklist[i].func_name_len) == 0) {
+    //       allowed = false;
+    //     }
+    //   }
+    // }
+
+    // /* If whitelist/blacklist testing was performed, and it was determined
+    //  * this function is not to be logged... */
+    // if (tested && !allowed)
+    //   return;
 
     tid = dr_get_thread_id(drcontext);
     if (tid != INVALID_THREAD_ID)
         dr_fprintf(outf, "~~%d~~ ", tid);
     else
         dr_fprintf(outf, "~~Dr.L~~ ");
-    dr_fprintf(outf, module_name);
+    dr_fprintf(outf, m2fargs->module_name);
 
     /* XXX: We employ two schemes of arguments printing.  We are looking for prototypes
      * in config file specified by user to get symbolic representation of arguments
@@ -359,7 +370,7 @@ lib_entry(void *wrapcxt, INOUT void **user_data)
      * we employ type-blindprinting and use -num_unknown_args to get a count of arguments
 	 * to print.
      */
-    print_symbolic_args(name, wrapcxt, func);
+    print_symbolic_args(m2fargs->args_vec, wrapcxt, func);
 
     if (op_print_ret_addr.get_value()) {
         ret_addr = drwrap_get_retaddr(wrapcxt);
@@ -379,6 +390,15 @@ lib_entry(void *wrapcxt, INOUT void **user_data)
 static void
 iterate_exports(const module_data_t *info, bool add)
 {
+
+    // pwd add
+    const module_data_t *mod = info;
+    const char *modname = NULL;
+    char module_name[MAX_MODULENAME_LEN];
+
+    if (mod != NULL)
+        modname = dr_module_preferred_name(mod);
+
     dr_symbol_export_iterator_t *exp_iter =
         dr_symbol_export_iterator_start(info->handle);
     while (dr_symbol_export_iterator_hasnext(exp_iter)) {
@@ -402,10 +422,73 @@ iterate_exports(const module_data_t *info, bool add)
 #endif
         if (op_ignore_underscore.get_value() && strstr(sym->name, "_") == sym->name)
             func = NULL;
+        const char * name = sym->name;
         if (func != NULL) {
+            memset(module_name, 0, sizeof(module_name));
+            unsigned int module_name_len = (unsigned int)snprintf(module_name, \
+                sizeof(module_name) - 1, "%s%s%s", modname == NULL ? "" : modname, \
+                modname == NULL ? "" : "!", name);
+
+            /* Check if this module & function is in the whitelist. */
+            bool allowed = false;
+            bool tested = false;  /* True only if any white/blacklist testing below is done. */
+            for (unsigned int i = 0; (allowed == false) && (i < filter_function_whitelist_len); i++) {
+                tested = true;
+
+                /* If the whitelist entry contains a wildcard, then compare only the shortest
+                * part of either string. */
+                unsigned int module_name_len_compare;
+                if (filter_function_whitelist[i].is_wildcard)
+                    module_name_len_compare = MIN(module_name_len, \
+                    filter_function_whitelist[i].func_name_len);
+                else
+                    module_name_len_compare = module_name_len;
+
+                if (fast_strcmp(module_name, module_name_len_compare, \
+                    filter_function_whitelist[i].func_name, \
+                    filter_function_whitelist[i].func_name_len) == 0) {
+                    allowed = true;
+                }
+            }
+
+            /* Check the blacklist if it was specified instead of a whitelist. */
+            if (!allowed && filter_function_blacklist_len > 0) {
+                allowed = true;
+                for (unsigned int i = 0; allowed && (i < filter_function_blacklist_len); i++) {
+                    tested = true;
+
+                /* If the blacklist entry contains a wildcard, then compare only the shortest
+                * part of either string. */
+                    unsigned int module_name_len_compare;
+                    if (filter_function_blacklist[i].is_wildcard)
+                        module_name_len_compare = MIN(module_name_len, \
+                            filter_function_blacklist[i].func_name_len);
+                    else
+                        module_name_len_compare = module_name_len;
+
+                    if (fast_strcmp(module_name, module_name_len_compare, \
+                        filter_function_blacklist[i].func_name, \
+                        filter_function_blacklist[i].func_name_len) == 0) {
+                        allowed = false;
+                    }
+                }
+            }
+
+            /* If whitelist/blacklist testing was performed, and it was determined
+            * this function is not to be logged... */
+            if (tested && !allowed)
+                continue;
+            
+            drltrace_m2fargs_t *cur_drltrace_m2fargs = (drltrace_m2fargs_t *) \
+              dr_global_alloc(sizeof(drltrace_m2fargs_t));
+            cur_drltrace_m2fargs->args_vec = libcalls_search(name);
+            cur_drltrace_m2fargs->next = drltrace_m2fargs_head;
+            memmove(cur_drltrace_m2fargs->module_name, module_name, MAX_MODULENAME_LEN);
+
+            drltrace_m2fargs_head = cur_drltrace_m2fargs;
             if (add) {
                 IF_DEBUG(bool ok =)
-                    drwrap_wrap_ex(func, lib_entry, NULL, (void *) sym->name, 0);
+                    drwrap_wrap_ex(func, lib_entry, NULL, (void *) cur_drltrace_m2fargs, 0);
                 ASSERT(ok, "wrap request failed");
                 VNOTIFY(2, "wrapping export %s!%s @" PFX NL,
                        dr_module_preferred_name(info), sym->name, func);
@@ -456,6 +539,10 @@ library_matches_filter(const module_data_t *info)
 static void
 event_module_load(void *drcontext, const module_data_t *info, bool loaded)
 {
+    if (!drltrace_m2fargs_head) {
+        drltrace_m2fargs_head = (drltrace_m2fargs_t *)dr_global_alloc(sizeof(drltrace_m2fargs_t));
+        drltrace_m2fargs_head->next = NULL;
+    }
     if (info->start != exe_start && library_matches_filter(info))
         iterate_exports(info, true/*add*/);
 }
@@ -673,6 +760,12 @@ event_exit(void)
 
     free_wblist_array(&filter_function_whitelist, filter_function_whitelist_len);
     free_wblist_array(&filter_function_blacklist, filter_function_blacklist_len);
+
+    while (drltrace_m2fargs_head) {
+        drltrace_m2fargs_t *cur_drltrace_m2fargs = drltrace_m2fargs_head;
+        drltrace_m2fargs_head = drltrace_m2fargs_head->next;
+        dr_global_free(cur_drltrace_m2fargs, sizeof(drltrace_m2fargs_t));
+    }
 
     drx_exit();
     drwrap_exit();
